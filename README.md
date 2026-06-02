@@ -36,11 +36,10 @@ Copy `.env.example` to `.env.local` and fill in:
 
 ### 3. Database setup
 
-Run the migration in Supabase SQL Editor:
+Run migrations in Supabase SQL Editor (in order):
 
-```bash
-supabase/migrations/001_initial_schema.sql
-```
+1. `supabase/migrations/001_initial_schema.sql`
+2. `supabase/migrations/002_storage.sql` — campaign asset uploads (WAV/MP4)
 
 ### 4. Stripe setup
 

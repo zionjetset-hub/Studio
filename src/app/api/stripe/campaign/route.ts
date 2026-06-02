@@ -5,11 +5,9 @@ import { CAMPAIGN_TIERS } from "@/lib/constants";
 import type { CampaignTier } from "@/types/database";
 
 interface CampaignCheckoutBody {
-  trackTitle: string;
-  genre: string;
-  artistName: string;
-  isrc?: string | null;
-  tier: CampaignTier;
+  campaignId: string;
+  audioFilePath?: string | null;
+  videoFilePath?: string | null;
 }
 
 export async function POST(request: Request) {
@@ -24,41 +22,56 @@ export async function POST(request: Request) {
     }
 
     const body = (await request.json()) as CampaignCheckoutBody;
-    const { trackTitle, genre, artistName, isrc, tier } = body;
+    const { campaignId, audioFilePath, videoFilePath } = body;
 
-    if (!trackTitle || !genre || !artistName || !tier) {
+    if (!campaignId) {
       return NextResponse.json(
-        { error: "Missing required campaign fields" },
+        { error: "Campaign ID is required" },
         { status: 400 }
       );
     }
 
+    if (!audioFilePath) {
+      return NextResponse.json(
+        { error: "Audio file is required" },
+        { status: 400 }
+      );
+    }
+
+    const { data: campaign, error: fetchError } = await supabase
+      .from("campaigns")
+      .select("*")
+      .eq("id", campaignId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (fetchError || !campaign) {
+      return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+    }
+
+    const tier = campaign.tier as CampaignTier;
     const tierConfig = CAMPAIGN_TIERS[tier];
     if (!tierConfig) {
       return NextResponse.json({ error: "Invalid tier" }, { status: 400 });
     }
 
-    const amountCents = tierConfig.price * 100;
+    const amountCents = campaign.tier_amount_cents;
+    const trackTitle = campaign.track_title;
+    const artistName = campaign.artist_name;
 
-    const { data: campaign, error: insertError } = await supabase
+    const { error: updateError } = await supabase
       .from("campaigns")
-      .insert({
-        user_id: user.id,
-        track_title: trackTitle,
-        genre,
-        artist_name: artistName,
-        isrc: isrc ?? null,
-        tier,
-        tier_amount_cents: amountCents,
+      .update({
+        audio_file_path: audioFilePath,
+        video_file_path: videoFilePath ?? null,
         status: "pending_payment",
       })
-      .select("id")
-      .single();
+      .eq("id", campaignId);
 
-    if (insertError || !campaign) {
-      console.error("Campaign insert error:", insertError);
+    if (updateError) {
+      console.error("Campaign update error:", updateError);
       return NextResponse.json(
-        { error: "Failed to save campaign" },
+        { error: "Failed to update campaign assets" },
         { status: 500 }
       );
     }
@@ -103,11 +116,11 @@ export async function POST(request: Request) {
           quantity: 1,
         },
       ],
-      success_url: `${appUrl}/dashboard/campaigns?success=campaign&id=${campaign.id}`,
+      success_url: `${appUrl}/dashboard/campaigns?success=campaign&id=${campaignId}`,
       cancel_url: `${appUrl}/dashboard/launch?canceled=true`,
       metadata: {
         supabase_user_id: user.id,
-        campaign_id: campaign.id,
+        campaign_id: campaignId,
         tier,
       },
     });
@@ -115,9 +128,9 @@ export async function POST(request: Request) {
     await supabase
       .from("campaigns")
       .update({ stripe_checkout_session_id: session.id })
-      .eq("id", campaign.id);
+      .eq("id", campaignId);
 
-    return NextResponse.json({ url: session.url, campaignId: campaign.id });
+    return NextResponse.json({ url: session.url, campaignId });
   } catch (error) {
     console.error("Campaign checkout error:", error);
     return NextResponse.json(

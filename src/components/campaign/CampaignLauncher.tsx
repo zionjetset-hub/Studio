@@ -9,6 +9,8 @@ import { TierStep } from "./steps/TierStep";
 import { CheckoutStep } from "./steps/CheckoutStep";
 import { cn } from "@/lib/utils";
 import { Check } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { uploadCampaignAsset } from "@/lib/upload-campaign-assets";
 import type { CampaignFormData, CampaignTier } from "@/types/database";
 
 const STEPS = [
@@ -58,10 +60,18 @@ export function CampaignLauncher() {
   }
 
   async function handleActivate() {
+    if (!form.tier || !form.audioFile) return;
+
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/stripe/campaign", {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("You must be signed in");
+
+      const draftRes = await fetch("/api/campaigns/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -72,9 +82,44 @@ export function CampaignLauncher() {
           tier: form.tier,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Checkout failed");
-      if (data.url) window.location.href = data.url;
+      const draftData = await draftRes.json();
+      if (!draftRes.ok) {
+        throw new Error(draftData.error ?? "Failed to create campaign");
+      }
+
+      const campaignId = draftData.campaignId as string;
+
+      const audioPath = await uploadCampaignAsset(
+        user.id,
+        campaignId,
+        form.audioFile,
+        "audio"
+      );
+
+      let videoPath: string | null = null;
+      if (form.videoFile) {
+        videoPath = await uploadCampaignAsset(
+          user.id,
+          campaignId,
+          form.videoFile,
+          "video"
+        );
+      }
+
+      const checkoutRes = await fetch("/api/stripe/campaign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId,
+          audioFilePath: audioPath,
+          videoFilePath: videoPath,
+        }),
+      });
+      const checkoutData = await checkoutRes.json();
+      if (!checkoutRes.ok) {
+        throw new Error(checkoutData.error ?? "Checkout failed");
+      }
+      if (checkoutData.url) window.location.href = checkoutData.url;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
